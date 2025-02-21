@@ -1,0 +1,11 @@
+Date,Product,Category,Price,Quantity,Region,Customer_Age
+2024-01-01,Laptop,Electronics,999.99,2,North,25
+2024-01-02,Smartphone,Electronics,699.99,3,South,34
+2024-01-02,Coffee Maker,Appliances,79.99,5,East,45
+2024-01-03,Headphones,Electronics,149.99,8,West,28
+2024-01-03,Blender,Appliances,59.99,4,North,52
+2024-01-04,Tablet,Electronics,449.99,3,South,31
+2024-01-04,Microwave,Appliances,199.99,2,East,39
+2024-01-05,Smart Watch,Electronics,299.99,6,West,27
+2024-01-05,Toaster,Appliances,49.99,7,North,42
+2024-01-06,Speaker,Electronics,129.99,4,South,33
