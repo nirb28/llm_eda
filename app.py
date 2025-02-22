@@ -74,6 +74,7 @@ if data_input_method == "Upload CSV":
         st.session_state.df = pd.read_csv(uploaded_file)
 else:
     url = st.text_input("Enter the URL of your CSV file:")
+    st.markdown("*Try this sample dataset: [Sample Sales Data](https://raw.githubusercontent.com/nirb28/llm_eda/main/sample_sales_data.csv)*")
     if url:
         st.session_state.df = load_data_from_url(url)
 
