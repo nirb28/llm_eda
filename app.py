@@ -9,6 +9,7 @@ from io import StringIO
 import plotly.express as px
 import plotly.graph_objects as go
 import json
+import re
 
 # Load environment variables
 load_dotenv()
@@ -66,6 +67,33 @@ def load_data_from_url(url):
         st.error(f"Error loading data from URL: {str(e)}")
         return None
 
+def extract_json_from_text(text):
+    """Extract JSON from text, handling various formats."""
+    try:
+        # Find any text that looks like a JSON object with "charts"
+        json_pattern = r'(?:"charts"|\'charts\')\s*:\s*\[(.*?)\]'
+        match = re.search(json_pattern, text, re.DOTALL)
+        
+        if match:
+            charts_content = match.group(1)
+            # Clean up the content and make it valid JSON
+            charts_content = charts_content.strip()
+            if not charts_content.endswith(']'):
+                charts_content += ']'
+            if not charts_content.startswith('['):
+                charts_content = '[' + charts_content
+                
+            # Wrap in a proper JSON object
+            json_str = '{"charts": ' + charts_content + '}'
+            
+            # Handle single quotes and normalize whitespace
+            json_str = json_str.replace("'", '"').replace('\n', ' ')
+            
+            return json.loads(json_str)
+    except Exception as e:
+        st.error(f"Error parsing chart JSON: {str(e)}")
+        return None
+
 def analyze_data(df, question):
     """Analyze the data using Groq LLM."""
     try:
@@ -97,6 +125,7 @@ def analyze_data(df, question):
         ]
         
         Only include the JSON if visualizations would be helpful for the analysis.
+        Make sure to format the JSON exactly as shown, with double quotes around keys and string values.
         """
         
         # Get response from Groq
@@ -104,28 +133,33 @@ def analyze_data(df, question):
         response = llm.invoke(messages)
         
         # Try to extract any chart specifications from the response
-        try:
-            # Look for JSON block in the response
-            start_idx = response.content.find('"charts":')
-            if start_idx != -1:
-                # Find the JSON array
-                json_str = "{" + response.content[start_idx:].split("}]")[0] + "}]}"
-                charts_data = json.loads(json_str)
-                
-                # Create and display each suggested chart
-                for chart_spec in charts_data["charts"]:
+        charts_data = extract_json_from_text(response.content)
+        
+        if charts_data and 'charts' in charts_data:
+            st.subheader("Visualizations")
+            for chart_spec in charts_data['charts']:
+                try:
+                    # Verify required fields are present
+                    required_fields = ['type', 'x', 'y', 'title']
+                    if not all(field in chart_spec for field in required_fields):
+                        st.warning(f"Skipping chart due to missing required fields. Got: {chart_spec}")
+                        continue
+                    
                     fig = create_chart(
                         df,
-                        chart_spec["type"],
-                        chart_spec["x"],
-                        chart_spec["y"],
-                        chart_spec["title"],
-                        chart_spec.get("color")  # color is optional
+                        chart_spec['type'],
+                        chart_spec['x'],
+                        chart_spec['y'],
+                        chart_spec['title'],
+                        chart_spec.get('color')  # color is optional
                     )
                     if fig:
                         st.plotly_chart(fig)
-        except Exception as e:
-            st.warning("Note: Could not create some suggested visualizations.")
+                    else:
+                        st.warning(f"Could not create chart with specification: {chart_spec}")
+                except Exception as e:
+                    st.error(f"Error creating chart: {str(e)}")
+                    st.code(chart_spec, language="json")
         
         # Return the text analysis
         return response.content
