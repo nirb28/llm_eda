@@ -10,6 +10,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 import re
+from sqlalchemy import create_engine, inspect
+import urllib.parse
+from pathlib import Path
+
+# Get the application's base directory
+BASE_DIR = Path(__file__).parent.absolute()
 
 # Load environment variables
 load_dotenv()
@@ -21,20 +27,76 @@ GROQ_MODELS = {
     "Gemma 9B": "gemma2-9b-it",
 }
 
-# Initialize session state for model
+# Database types and their connection string formats
+DB_TYPES = {
+    "PostgreSQL": "postgresql://{user}:{password}@{host}:{port}/{database}",
+    "MySQL": "mysql+pymysql://{user}:{password}@{host}:{port}/{database}",
+    "SQLite": "sqlite:///{database_path}",
+}
+
+# Initialize session states
 if 'model_name' not in st.session_state:
     st.session_state.model_name = "deepseek-r1-distill-llama-70b"
+if 'db_engine' not in st.session_state:
+    st.session_state.db_engine = None
+if 'tables' not in st.session_state:
+    st.session_state.tables = []
+if 'selected_table' not in st.session_state:
+    st.session_state.selected_table = None
+if 'llm' not in st.session_state:
+    st.session_state.llm = None
 
 def initialize_llm():
     """Initialize or reinitialize the Groq LLM with selected model."""
     groq_api_key = os.getenv("GROQ_API_KEY")
-    return ChatGroq(
+    st.session_state.llm = ChatGroq(
         api_key=groq_api_key,
         model_name=st.session_state.model_name
     )
+    return st.session_state.llm
 
-# Initialize Groq LLM
-llm = initialize_llm()
+# Initialize Groq LLM at startup
+initialize_llm()
+
+def connect_to_database(db_type, **params):
+    """Create database connection using SQLAlchemy."""
+    try:
+        if db_type == "SQLite":
+            # Handle relative paths for SQLite
+            db_path = params['database_path']
+            if not os.path.isabs(db_path):
+                db_path = os.path.join(BASE_DIR, db_path)
+            conn_str = DB_TYPES[db_type].format(database_path=db_path)
+        else:
+            # URL encode the password to handle special characters
+            params['password'] = urllib.parse.quote_plus(params['password'])
+            conn_str = DB_TYPES[db_type].format(**params)
+        
+        engine = create_engine(conn_str)
+        # Test the connection
+        with engine.connect() as conn:
+            pass
+        return engine
+    except Exception as e:
+        st.error(f"Database connection error: {str(e)}")
+        return None
+
+def get_table_names(engine):
+    """Get list of tables in the database."""
+    try:
+        inspector = inspect(engine)
+        return inspector.get_table_names()
+    except Exception as e:
+        st.error(f"Error getting tables: {str(e)}")
+        return []
+
+def load_table_data(engine, table_name):
+    """Load data from a database table into a pandas DataFrame."""
+    try:
+        return pd.read_sql_table(table_name, engine)
+    except Exception as e:
+        st.error(f"Error loading table data: {str(e)}")
+        return None
 
 def create_chart(df, chart_type, x, y, title, color=None):
     """Create a Plotly chart based on specifications."""
@@ -130,7 +192,7 @@ def analyze_data(df, question):
         
         # Get response from Groq
         messages = [HumanMessage(content=prompt)]
-        response = llm.invoke(messages)
+        response = st.session_state.llm.invoke(messages)
         
         # Try to extract any chart specifications from the response
         charts_data = extract_json_from_text(response.content)
@@ -176,7 +238,7 @@ if not groq_api_key:
     st.error("Please set your GROQ_API_KEY in the .env file")
     st.stop()
 
-# Model selection
+# Model selection in sidebar
 st.sidebar.header("Model Settings")
 selected_model = st.sidebar.selectbox(
     "Choose Groq Model",
@@ -188,7 +250,7 @@ selected_model = st.sidebar.selectbox(
 # Update model if changed
 if GROQ_MODELS[selected_model] != st.session_state.model_name:
     st.session_state.model_name = GROQ_MODELS[selected_model]
-    llm = initialize_llm()
+    initialize_llm()
     st.sidebar.success(f"Model updated to {selected_model}")
 
 # Add model description
@@ -200,18 +262,18 @@ model_descriptions = {
 st.sidebar.markdown(f"*{model_descriptions[selected_model]}*")
 
 # Data input method selection
-data_input_method = st.radio("Choose data input method:", ["Upload CSV", "Enter URL"])
+data_input_method = st.radio("Choose data input method:", ["Upload CSV", "Enter URL", "Connect to Database"])
 
 # Initialize session state for dataframe
 if 'df' not in st.session_state:
     st.session_state.df = None
 
-# Data upload/URL input
+# Data input handling
 if data_input_method == "Upload CSV":
     uploaded_file = st.file_uploader("Upload your CSV file", type=['csv'])
     if uploaded_file:
         st.session_state.df = pd.read_csv(uploaded_file)
-else:
+elif data_input_method == "Enter URL":
     url = st.text_input("Enter the URL of your CSV file:")
     col1, col2 = st.columns([0.9, 0.1])
     sample_url = "https://raw.githubusercontent.com/nirb28/llm_eda/main/sample_sales_data.csv"
@@ -224,6 +286,44 @@ else:
             url = sample_url
     if url:
         st.session_state.df = load_data_from_url(url)
+else:  # Database connection
+    db_type = st.selectbox("Select Database Type", options=list(DB_TYPES.keys()))
+    
+    # Database connection parameters
+    if db_type == "SQLite":
+        db_params = {
+            'database_path': st.text_input("Database Path", 
+                help="You can use relative paths like 'sample_movies.db' or absolute paths")
+        }
+        st.markdown("*Try the sample database: `sample_movies.db`*")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            db_params = {
+                'host': st.text_input("Host", "localhost"),
+                'port': st.text_input("Port", "5432" if db_type == "PostgreSQL" else "3306"),
+                'database': st.text_input("Database Name"),
+            }
+        with col2:
+            db_params.update({
+                'user': st.text_input("Username"),
+                'password': st.text_input("Password", type="password"),
+            })
+    
+    # Connect button
+    if st.button("Connect to Database"):
+        engine = connect_to_database(db_type, **db_params)
+        if engine:
+            st.session_state.db_engine = engine
+            st.session_state.tables = get_table_names(engine)
+            st.success("Successfully connected to the database!")
+    
+    # Table selection if connected
+    if st.session_state.db_engine and st.session_state.tables:
+        selected_table = st.selectbox("Select Table", options=st.session_state.tables)
+        if selected_table != st.session_state.selected_table:
+            st.session_state.selected_table = selected_table
+            st.session_state.df = load_table_data(st.session_state.db_engine, selected_table)
 
 # Display dataset if loaded
 if st.session_state.df is not None:

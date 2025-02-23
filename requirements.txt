@@ -1,6 +1,11 @@
-langchain==0.1.0
+langchain==0.3.19
 langchain-groq==0.2.4
 pandas==2.1.4
 python-dotenv==1.0.0
 streamlit==1.30.0
 requests==2.31.0
+plotly==5.18.0
+sqlalchemy==2.0.38
+pymysql==1.1.1
+psycopg2-binary==2.9.10
+numpy==1.26.4
