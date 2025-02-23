@@ -6,16 +6,55 @@ from langchain_groq import ChatGroq
 from langchain.schema import HumanMessage
 import requests
 from io import StringIO
+import plotly.express as px
+import plotly.graph_objects as go
+import json
 
 # Load environment variables
 load_dotenv()
 
+# Available Groq models
+GROQ_MODELS = {
+    "Mixtral 8x7B": "mixtral-8x7b-32768",
+    "Deepseek R1 / Llama 70B": "deepseek-r1-distill-llama-70b",
+    "Gemma 9B": "gemma2-9b-it",
+}
+
+# Initialize session state for model
+if 'model_name' not in st.session_state:
+    st.session_state.model_name = "deepseek-r1-distill-llama-70b"
+
+def initialize_llm():
+    """Initialize or reinitialize the Groq LLM with selected model."""
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    return ChatGroq(
+        api_key=groq_api_key,
+        model_name=st.session_state.model_name
+    )
+
 # Initialize Groq LLM
-groq_api_key = os.getenv("GROQ_API_KEY")
-llm = ChatGroq(
-    api_key=groq_api_key,
-    model_name="mixtral-8x7b-32768"
-)
+llm = initialize_llm()
+
+def create_chart(df, chart_type, x, y, title, color=None):
+    """Create a Plotly chart based on specifications."""
+    try:
+        if chart_type == "bar":
+            fig = px.bar(df, x=x, y=y, title=title, color=color)
+        elif chart_type == "line":
+            fig = px.line(df, x=x, y=y, title=title, color=color)
+        elif chart_type == "scatter":
+            fig = px.scatter(df, x=x, y=y, title=title, color=color)
+        elif chart_type == "pie":
+            fig = px.pie(df, values=y, names=x, title=title)
+        elif chart_type == "box":
+            fig = px.box(df, x=x, y=y, title=title, color=color)
+        else:
+            return None
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error creating chart: {str(e)}")
+        return None
 
 def load_data_from_url(url):
     """Load data from a URL."""
@@ -33,32 +72,98 @@ def analyze_data(df, question):
         # Create a context about the data
         data_info = f"DataFrame Info:\n{df.info(buf=StringIO(), show_counts=True)}\n"
         data_head = f"First few rows:\n{df.head().to_string()}\n"
+        data_describe = f"Numerical Summary:\n{df.describe().to_string()}\n"
         
         # Construct the prompt
         prompt = f"""Given this dataset:
         {data_info}
         {data_head}
+        {data_describe}
         
         Question: {question}
         
-        Please provide a detailed analysis."""
+        Please provide:
+        1. A detailed analysis of the data
+        2. If relevant, suggest one or more visualizations with these specifications:
+           - Chart type (one of: bar, line, scatter, pie, box)
+           - X-axis column
+           - Y-axis column
+           - Title
+           - Color column (optional)
+        
+        Format visualization suggestions as JSON like this:
+        "charts": [
+            {{"type": "bar", "x": "column1", "y": "column2", "title": "Chart Title", "color": "column3"}}
+        ]
+        
+        Only include the JSON if visualizations would be helpful for the analysis.
+        """
         
         # Get response from Groq
         messages = [HumanMessage(content=prompt)]
         response = llm.invoke(messages)
         
+        # Try to extract any chart specifications from the response
+        try:
+            # Look for JSON block in the response
+            start_idx = response.content.find('"charts":')
+            if start_idx != -1:
+                # Find the JSON array
+                json_str = "{" + response.content[start_idx:].split("}]")[0] + "}]}"
+                charts_data = json.loads(json_str)
+                
+                # Create and display each suggested chart
+                for chart_spec in charts_data["charts"]:
+                    fig = create_chart(
+                        df,
+                        chart_spec["type"],
+                        chart_spec["x"],
+                        chart_spec["y"],
+                        chart_spec["title"],
+                        chart_spec.get("color")  # color is optional
+                    )
+                    if fig:
+                        st.plotly_chart(fig)
+        except Exception as e:
+            st.warning("Note: Could not create some suggested visualizations.")
+        
+        # Return the text analysis
         return response.content
     except Exception as e:
         st.error(f"Error during analysis: {str(e)}")
         return None
 
 # Streamlit UI
-st.title("Dataset Analysis")
+st.title("Dataset Analysis with Groq LLM")
 
 # Check for API key
+groq_api_key = os.getenv("GROQ_API_KEY")
 if not groq_api_key:
     st.error("Please set your GROQ_API_KEY in the .env file")
     st.stop()
+
+# Model selection
+st.sidebar.header("Model Settings")
+selected_model = st.sidebar.selectbox(
+    "Choose Groq Model",
+    options=list(GROQ_MODELS.keys()),
+    format_func=lambda x: x,
+    index=list(GROQ_MODELS.values()).index(st.session_state.model_name)
+)
+
+# Update model if changed
+if GROQ_MODELS[selected_model] != st.session_state.model_name:
+    st.session_state.model_name = GROQ_MODELS[selected_model]
+    llm = initialize_llm()
+    st.sidebar.success(f"Model updated to {selected_model}")
+
+# Add model description
+model_descriptions = {
+    "Mixtral 8x7B": "A powerful mixture-of-experts model with strong analytical capabilities.",
+    "Deepseek R1 / Llama 70B": "Deepseek R1, excellent for complex reasoning.",
+    "Gemma 9B": "Google's efficient model, good balance of performance and speed."
+}
+st.sidebar.markdown(f"*{model_descriptions[selected_model]}*")
 
 # Data input method selection
 data_input_method = st.radio("Choose data input method:", ["Upload CSV", "Enter URL"])
