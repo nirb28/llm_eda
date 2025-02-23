@@ -48,7 +48,8 @@ if 'llm' not in st.session_state:
 
 def initialize_llm():
     """Initialize or reinitialize the Groq LLM with selected model."""
-    groq_api_key = os.getenv("GROQ_API_KEY")
+    # groq_api_key = os.getenv("GROQ_API_KEY")
+    groq_api_key = st.secrets["GROQ_API_KEY"]
     st.session_state.llm = ChatGroq(
         api_key=groq_api_key,
         model_name=st.session_state.model_name
@@ -230,7 +231,7 @@ def analyze_data(df, question):
         return None
 
 # Streamlit UI
-st.title("Dataset Analysis with Groq LLM")
+st.title("Dataset Analysis")
 
 # Check for API key
 groq_api_key = os.getenv("GROQ_API_KEY")
