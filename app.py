@@ -53,7 +53,7 @@ def analyze_data(df, question):
         return None
 
 # Streamlit UI
-st.title("Dataset Analysis with Groq LLM")
+st.title("Dataset Analysis")
 
 # Check for API key
 if not groq_api_key:
@@ -74,7 +74,15 @@ if data_input_method == "Upload CSV":
         st.session_state.df = pd.read_csv(uploaded_file)
 else:
     url = st.text_input("Enter the URL of your CSV file:")
-    st.markdown("*Try this sample dataset: [Sample Sales Data](https://raw.githubusercontent.com/nirb28/llm_eda/main/sample_sales_data.csv)*")
+    col1, col2 = st.columns([0.9, 0.1])
+    sample_url = "https://raw.githubusercontent.com/nirb28/llm_eda/main/sample_sales_data.csv"
+    with col1:
+        st.markdown(f"*Try this sample dataset: [Sample Sales Data]({sample_url})*")
+    with col2:
+        if st.button("📋"):
+            st.write("URL copied! ✅")
+            st.session_state.url = sample_url
+            url = sample_url
     if url:
         st.session_state.df = load_data_from_url(url)
 
