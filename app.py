@@ -46,10 +46,34 @@ if 'selected_table' not in st.session_state:
 if 'llm' not in st.session_state:
     st.session_state.llm = None
 
+def get_api_key():
+    """Get API key from various sources."""
+    # Try environment variable first
+    api_key = os.getenv("GROQ_API_KEY")
+    if api_key:
+        return api_key
+    
+    # Try streamlit secrets
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except:
+        pass
+    
+    # If no API key found, let user input it
+    return st.text_input(
+        "Enter your Groq API Key:",
+        type="password",
+        help="Your API key will not be stored permanently"
+    )
+
 def initialize_llm():
     """Initialize or reinitialize the Groq LLM with selected model."""
-    # groq_api_key = os.getenv("GROQ_API_KEY")
-    groq_api_key = st.secrets["GROQ_API_KEY"]
+    groq_api_key = get_api_key()
+    
+    if not groq_api_key:
+        st.error("Please provide your Groq API Key")
+        st.stop()
+    
     st.session_state.llm = ChatGroq(
         api_key=groq_api_key,
         model_name=st.session_state.model_name
@@ -232,12 +256,6 @@ def analyze_data(df, question):
 
 # Streamlit UI
 st.title("Dataset Analysis")
-
-# Check for API key
-groq_api_key = os.getenv("GROQ_API_KEY")
-if not groq_api_key:
-    st.error("Please set your GROQ_API_KEY in the .env file")
-    st.stop()
 
 # Model selection in sidebar
 st.sidebar.header("Model Settings")
