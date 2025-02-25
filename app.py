@@ -196,10 +196,16 @@ def analyze_data(df, question):
         {data_describe}
         
         Question: {question}
-        
-        Please provide:
-        1. A detailed analysis of the data
-        2. If relevant, suggest one or more visualizations with these specifications:
+
+        Please provide the relevant analysis. When analyzing data:
+        1. If the question asks for a specific value, number, or simple fact, provide a direct answer without visualization.
+        2. Only suggest visualizations when they add meaningful insight, such as:
+        - Showing trends over time
+        - Comparing multiple categories
+        - Revealing patterns or distributions
+        - Demonstrating correlations
+
+        If applicable suggest one or more visualizations with these specifications:
            - Chart type (one of: bar, line, scatter, pie, box)
            - X-axis column
            - Y-axis column
@@ -213,6 +219,11 @@ def analyze_data(df, question):
         
         Only include the JSON if visualizations would be helpful for the analysis.
         Make sure to format the JSON exactly as shown, with double quotes around keys and string values.
+
+        3. Keep responses concise and to the point.
+        4. Format numbers appropriately (e.g., use thousands separator, round to 2 decimal places for currency).
+        5. IMPORTANT: Only use the column names that exist in the DataFrame as shown above.
+
         """
         
         # Get response from Groq
