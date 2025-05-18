@@ -13,6 +13,9 @@ import re
 from sqlalchemy import create_engine, inspect
 import urllib.parse
 from pathlib import Path
+from langchain.llms.base import LLM
+from typing import Any, List, Mapping, Optional
+from langchain.callbacks.manager import CallbackManagerForLLMRun
 
 # Get the application's base directory
 BASE_DIR = Path(__file__).parent.absolute()
@@ -25,6 +28,11 @@ GROQ_MODELS = {
     "Mixtral 8x7B": "mixtral-8x7b-32768",
     "Deepseek R1 / Llama 70B": "deepseek-r1-distill-llama-70b",
     "Gemma 9B": "gemma2-9b-it",
+}
+
+# Add Triton server model
+TRITON_MODELS = {
+    "Meta Llama 3.1 8B (Triton)": "Meta-Llama-3.1-8B-Instruct"
 }
 
 # Database types and their connection string formats
@@ -45,6 +53,65 @@ if 'selected_table' not in st.session_state:
     st.session_state.selected_table = None
 if 'llm' not in st.session_state:
     st.session_state.llm = None
+if 'triton_server_url' not in st.session_state:
+    st.session_state.triton_server_url = os.getenv("TRITON_SERVER_URL", "")
+if 'use_triton' not in st.session_state:
+    st.session_state.use_triton = False
+
+# Custom LLM class for Triton Inference Server
+class TritonLLM(LLM):
+    server_url: str
+    model_name: str
+    
+    @property
+    def _llm_type(self) -> str:
+        return "triton"
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+    ) -> str:
+        """Call the Triton model with the given prompt."""
+        try:
+            # Construct the full URL for the Triton server endpoint
+            url = f"{self.server_url}/v2/models/{self.model_name}/generate"
+            
+            # Prepare the request payload
+            payload = {
+                "text_input": prompt,
+                "max_tokens": 2048,
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "stream": False
+            }
+            
+            # Add stop tokens if provided
+            if stop:
+                payload["stop"] = stop
+            
+            # Make the POST request to Triton server
+            response = requests.post(url, json=payload)
+            
+            # Check if the request was successful
+            if response.status_code == 200:
+                result = response.json()
+                # Extract the generated text from the response
+                # Note: The exact structure depends on your Triton server's response format
+                generated_text = result.get("text_output", "")
+                return generated_text
+            else:
+                error_msg = f"Triton server error: {response.status_code} - {response.text}"
+                st.error(error_msg)
+                return f"Error: {error_msg}"
+                
+        except Exception as e:
+            st.error(f"Error calling Triton server: {str(e)}")
+            return f"Error: {str(e)}"
+    
+    def _identifying_params(self) -> Mapping[str, Any]:
+        return {"server_url": self.server_url, "model_name": self.model_name}
 
 def get_api_key():
     """Get API key from various sources."""
@@ -67,21 +134,44 @@ def get_api_key():
     )
 
 def initialize_llm():
-    """Initialize or reinitialize the Groq LLM with selected model."""
-    groq_api_key = get_api_key()
+    """Initialize or reinitialize the LLM with selected model."""
+    if st.session_state.use_triton:
+        # Get or set Triton server URL
+        triton_server_url = st.session_state.triton_server_url
+        if not triton_server_url:
+            triton_server_url = os.getenv("TRITON_SERVER_URL", "")
+            if not triton_server_url:
+                triton_server_url = st.text_input(
+                    "Enter your Triton Server URL:",
+                    help="Example: http://localhost:8000"
+                )
+                if not triton_server_url:
+                    st.error("Please provide your Triton Server URL")
+                    st.stop()
+                st.session_state.triton_server_url = triton_server_url
+        
+        # Extract model name from the full model identifier
+        triton_model_name = st.session_state.model_name
+        
+        # Initialize TritonLLM
+        st.session_state.llm = TritonLLM(
+            server_url=triton_server_url,
+            model_name=triton_model_name
+        )
+    else:
+        # Original Groq initialization
+        groq_api_key = get_api_key()
+        
+        if not groq_api_key:
+            st.error("Please provide your Groq API Key")
+            st.stop()
+        
+        st.session_state.llm = ChatGroq(
+            api_key=groq_api_key,
+            model_name=st.session_state.model_name
+        )
     
-    if not groq_api_key:
-        st.error("Please provide your Groq API Key")
-        st.stop()
-    
-    st.session_state.llm = ChatGroq(
-        api_key=groq_api_key,
-        model_name=st.session_state.model_name
-    )
     return st.session_state.llm
-
-# Initialize Groq LLM at startup
-initialize_llm()
 
 def connect_to_database(db_type, **params):
     """Create database connection using SQLAlchemy."""
@@ -265,31 +355,66 @@ def analyze_data(df, question):
         st.error(f"Error during analysis: {str(e)}")
         return None
 
-# Streamlit UI
 st.title("Dataset Analysis")
 
 # Model selection in sidebar
 st.sidebar.header("Model Settings")
-selected_model = st.sidebar.selectbox(
-    "Choose Groq Model",
-    options=list(GROQ_MODELS.keys()),
-    format_func=lambda x: x,
-    index=list(GROQ_MODELS.values()).index(st.session_state.model_name)
+
+# Add model provider selection
+model_provider = st.sidebar.radio(
+    "Select Model Provider",
+    options=["Groq", "Triton Server"]
 )
 
-# Update model if changed
-if GROQ_MODELS[selected_model] != st.session_state.model_name:
-    st.session_state.model_name = GROQ_MODELS[selected_model]
-    initialize_llm()
-    st.sidebar.success(f"Model updated to {selected_model}")
+# Set the use_triton flag based on selection
+st.session_state.use_triton = (model_provider == "Triton Server")
 
-# Add model description
-model_descriptions = {
-    "Mixtral 8x7B": "A powerful mixture-of-experts model with strong analytical capabilities.",
-    "Deepseek R1 / Llama 70B": "Deepseek R1, excellent for complex reasoning.",
-    "Gemma 9B": "Google's efficient model, good balance of performance and speed."
-}
-st.sidebar.markdown(f"*{model_descriptions[selected_model]}*")
+# Show appropriate model selection based on provider
+if st.session_state.use_triton:
+    selected_model = st.sidebar.selectbox(
+        "Choose Triton Model",
+        options=list(TRITON_MODELS.keys()),
+        format_func=lambda x: x,
+    )
+    # Update model if changed
+    if TRITON_MODELS[selected_model] != st.session_state.model_name:
+        st.session_state.model_name = TRITON_MODELS[selected_model]
+        initialize_llm()
+        st.sidebar.success(f"Model updated to {selected_model}")
+    
+    # Add Triton server URL input
+    triton_url = st.sidebar.text_input(
+        "Triton Server URL",
+        value=st.session_state.triton_server_url,
+        help="Example: http://localhost:8000"
+    )
+    if triton_url != st.session_state.triton_server_url:
+        st.session_state.triton_server_url = triton_url
+        initialize_llm()
+        st.sidebar.success("Triton Server URL updated")
+    
+    # Add Triton model description
+    st.sidebar.markdown("*Meta Llama 3.1 8B - Efficient instruction-following language model by Meta*")
+else:
+    selected_model = st.sidebar.selectbox(
+        "Choose Groq Model",
+        options=list(GROQ_MODELS.keys()),
+        format_func=lambda x: x,
+        index=list(GROQ_MODELS.values()).index(st.session_state.model_name) if st.session_state.model_name in GROQ_MODELS.values() else 0
+    )
+    # Update model if changed
+    if GROQ_MODELS[selected_model] != st.session_state.model_name:
+        st.session_state.model_name = GROQ_MODELS[selected_model]
+        initialize_llm()
+        st.sidebar.success(f"Model updated to {selected_model}")
+    
+    # Add model description
+    model_descriptions = {
+        "Mixtral 8x7B": "A powerful mixture-of-experts model with strong analytical capabilities.",
+        "Deepseek R1 / Llama 70B": "Deepseek R1, excellent for complex reasoning.",
+        "Gemma 9B": "Google's efficient model, good balance of performance and speed."
+    }
+    st.sidebar.markdown(f"*{model_descriptions[selected_model]}*")
 
 # Data input method selection
 data_input_method = st.radio("Choose data input method:", ["Upload CSV", "Enter URL", "Connect to Database"])
